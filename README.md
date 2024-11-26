@@ -4,7 +4,13 @@ Differential Dynamic Programming (DDP) implementations in jax
 Contents:
 - Vanilla DDP
 - Augmented Lagrangian DDP (ALDDP)
-  - [Constrained Differential Dynamic Programming Revisited](https://ieeexplore.ieee.org/document/9561530)
+  - original paper: [Constrained Differential Dynamic Programming Revisited](https://ieeexplore.ieee.org/document/9561530)
+
+<br>
+ 
+<br>
+
+![gif](https://github.com/Emile-Aquila/ddp_jax/blob/main/figs/output.gif)
 
 
 <br>
