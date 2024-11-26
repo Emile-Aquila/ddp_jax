@@ -6,12 +6,6 @@ Contents:
 - Augmented Lagrangian DDP (ALDDP)
   - original paper: [Constrained Differential Dynamic Programming Revisited](https://ieeexplore.ieee.org/document/9561530)
 
-<br>
- 
-<br>
-
-![gif](https://github.com/Emile-Aquila/ddp_jax/blob/main/figs/output.gif)
-
 
 <br>
 
@@ -29,3 +23,17 @@ You can run the examples using the following commands:
   poetry run python ./examples/example_ddp.py
   poetry run python ./examples/example_alddp.py
 ```
+
+<br>
+
+<br>
+
+### 1.vanilla DDP example
+
+![png](https://github.com/Emile-Aquila/ddp_jax/blob/main/figs/example_ddp.png)
+
+<br>
+
+### 2.AL-DDP example
+
+![gif](https://github.com/Emile-Aquila/ddp_jax/blob/main/figs/output.gif)
