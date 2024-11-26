@@ -110,7 +110,7 @@ def main():
 
     anim = FuncAnimation(fig, func=functools.partial(update, field=field),
                          frames=zip(states, predicted_traj_lists), interval=100, cache_frame_data=False)
-    anim.save("output.gif", writer="pillow")
+    anim.save("./figs/output.gif", writer="pillow")
     plt.close()
 
 
