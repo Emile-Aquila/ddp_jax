@@ -5,7 +5,7 @@ Contents:
 - Vanilla DDP
 - Augmented Lagrangian DDP (ALDDP)
   - original paper: [Constrained Differential Dynamic Programming Revisited](https://ieeexplore.ieee.org/document/9561530)
-
+- (on going) Maximum Entropy DDP (ME-DDP)
 
 <br>
 
