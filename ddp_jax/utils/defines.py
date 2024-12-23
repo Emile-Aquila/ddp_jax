@@ -1,10 +1,10 @@
-from typing import Callable, Tuple
+from typing import Tuple
 import jax.numpy as jnp
 from abc import ABC, abstractmethod
-import chex
+from flax import struct
 
 
-@chex.dataclass
+@struct.dataclass
 class ReferenceTrajectory:  # 参照軌道
     ref_xs: jnp.ndarray  # (horizon+1, n_x)
     ref_us: jnp.ndarray  # (horizon, n_u)

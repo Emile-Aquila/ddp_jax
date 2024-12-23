@@ -15,6 +15,7 @@ chex = "^0.1.87"
 scikit-learn = "^1.5.2"
 python-louvain = "^0.16"
 tqdm = "^4.67.0"
+flax = "^0.10.2"
 
 
 [build-system]

@@ -137,9 +137,9 @@ class ALDDPController(ControllerBase):
         return x_traj_new, u_traj_new, j_new
 
     @partial(jax.jit, static_argnames=["self"])
-    def calc_input(self, x: jnp.ndarray, target_x: jnp.ndarray, ref_traj: ReferenceTrajectory) -> Tuple[jnp.ndarray, ReferenceTrajectory]:
-        ref_traj.lambdas = jnp.zeros_like(ref_traj.lambdas) + 1e-6
-        traj_info = jax.lax.stop_gradient(self.iterative_compute(x, ref_traj, target_x, self.max_iter))
+    def calc_input(self, x: jnp.ndarray, target_x: jnp.ndarray, ref_traj_pre: ReferenceTrajectory) -> Tuple[jnp.ndarray, ReferenceTrajectory]:
+        ref_traj = ReferenceTrajectory(ref_xs=ref_traj_pre.ref_xs, ref_us=ref_traj_pre.ref_us, lambdas=jnp.zeros_like(ref_traj_pre.lambdas) + 1e-6)
+        traj_info = self.iterative_compute(x, ref_traj, target_x, self.max_iter)
         return traj_info.ref_us[0], traj_info
 
     @partial(jax.jit, static_argnames="self")
