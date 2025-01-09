@@ -21,3 +21,8 @@ flax = "^0.10.2"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+
+#[tool.poetry.dependencies."jax-metal"]  # 行列演算が使えない
+#version = ">=0.1.1"
+#markers = "sys_platform == 'darwin'"
