@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 
 
-
 @jax.jit
 def regularize_matrix(hermite_matrix: jnp.ndarray, min_lambda: float = 1e-3) -> jnp.ndarray:
     min_value = jnp.min(jnp.linalg.eigh(hermite_matrix)[0])

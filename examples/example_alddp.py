@@ -9,7 +9,7 @@ from ddp_jax.controllers.al_ddp import ALDDPController
 from ddp_jax.objects.field import Field, GenTestField
 import functools
 import time
-from ddp_jax.utils.defines import ReferenceTrajectory
+from ddp_jax.utils.defines import ReferenceTrajectory, ConstraintArgs, ObstacleData
 
 
 def plot_ax(state: np.ndarray, ref_xs: np.ndarray, start: np.ndarray, goal: np.ndarray, ax):
@@ -25,13 +25,18 @@ def plot_ax(state: np.ndarray, ref_xs: np.ndarray, start: np.ndarray, goal: np.n
 
 
 @jax.jit
-def input_constraint(x: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:
-    return (u.T @ u - 2.0) / 6.0
+def input_constraint(_: jnp.ndarray, u: jnp.ndarray, __: ConstraintArgs) -> jnp.ndarray:
+    return ((u.T @ u - 2.0) / 6.0).reshape(-1)
 
 @jax.jit
-def state_constraint(x: jnp.ndarray, u:jnp.ndarray, other_x: jnp.ndarray, r: float) -> jnp.ndarray:
-    return 2 * r - jnp.sqrt((x - other_x).T @ jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0, 0.0])) @ (x - other_x))
+def state_constraint1(x: jnp.ndarray, _:jnp.ndarray, c_arg: ConstraintArgs) -> jnp.ndarray:
+    obs_pos, obs_r = c_arg.obs_data1.obs_pos, c_arg.obs_data1.obs_r
+    return 2 * obs_r - jnp.sqrt((x - obs_pos).T @ jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0, 0.0])) @ (x - obs_pos))
 
+@jax.jit
+def state_constraint2(x: jnp.ndarray, _:jnp.ndarray, c_arg: ConstraintArgs) -> jnp.ndarray:
+    obs_pos, obs_r = c_arg.obs_data2.obs_pos, c_arg.obs_data2.obs_r
+    return 2 * obs_r - jnp.sqrt((x - obs_pos).T @ jnp.diag(jnp.array([1.0, 1.0, 0.0, 0.0, 0.0])) @ (x - obs_pos))
 
 
 def main():
@@ -45,9 +50,20 @@ def main():
     n_constraints = 3
     f_constraints = [
         input_constraint,
-        functools.partial(state_constraint, other_x=jnp.array([5.0, 5.0, 0.0, 0.0, 0.0]), r=1.0),
-        functools.partial(state_constraint, other_x=jnp.array([4.0, 4.0, 0.0, 0.0, 0.0]), r=1.0)
+        state_constraint1,
+        state_constraint2
     ]
+    # Constraint Argsの定義はdefines.pyにあります. 適宜変更して下さい.
+    c_args: ConstraintArgs = ConstraintArgs(
+        obs_data1=ObstacleData(
+            obs_pos=jnp.repeat(jnp.array([5.0, 5.0, 0.0, 0.0, 0.0])[None, :], horizon, axis=0),
+            obs_r = jnp.repeat(jnp.array([1.0])[None, :], horizon, axis=0)
+        ),
+        obs_data2=ObstacleData(
+            obs_pos=jnp.repeat(jnp.array([4.0, 4.0, 0.0, 0.0, 0.0])[None, :], horizon, axis=0),
+            obs_r = jnp.repeat(jnp.array([1.0])[None, :], horizon, axis=0)
+        )
+    )
 
     # Controller Settings
     Q = jnp.diag(jnp.array([1.0, 1.0, 1.0, 0.0, 0.0]))
@@ -70,7 +86,7 @@ def main():
 
     # jit compile
     print("start jit compile")
-    _, _ = controller.calc_input(state, goal, ref_traj)
+    _, _ = controller.calc_input(state, goal, c_args, ref_traj)
     print("end jit compile")
 
 
@@ -82,7 +98,7 @@ def main():
     start_time = time.perf_counter()
 
     for _ in range(200):
-        input_u, ref_traj = controller.calc_input(state, goal, ref_traj)
+        input_u, ref_traj = controller.calc_input(state, goal, c_args, ref_traj)
         state = dynamics(state, input_u)
         jax.debug.print("{}", state)
         states.append(np.array(state))

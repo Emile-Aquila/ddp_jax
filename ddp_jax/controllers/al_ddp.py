@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jax import grad, jacfwd, hessian
 from functools import partial
 from jax.tree_util import register_pytree_node_class
-from ..utils.defines import ReferenceTrajectory, ControllerBase
+from ..utils.defines import ReferenceTrajectory, ControllerBase, ConstraintArgs
 from ..utils.util_functions import regularize_matrix
 
 
@@ -17,7 +17,7 @@ class ALDDPController(ControllerBase):
         self.f_dynamics: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray] = f_dynamics
 
         # 制約関数
-        self.f_constraints: Callable = jax.jit(lambda x_, u_: jnp.array([f(x_, u_) for f in f_constraints]))
+        self.f_constraints: Callable = jax.jit(lambda x_, u_, c_arg_: jnp.concatenate([f(x_, u_, c_arg_) for f in f_constraints], axis=0))
         self.f_consts: list[Callable] = f_constraints
 
         # ハイパーパラメータ
@@ -45,13 +45,11 @@ class ALDDPController(ControllerBase):
         tmp = (mu * constraint_val) / lambda_
         return (lambda_ ** 2 / mu) * jnp.where(tmp >= -0.5, 0.5 * tmp ** 2 + tmp, -0.25 * jnp.log(-2 * tmp) - 3 / 8)
 
-
     @partial(jax.jit, static_argnames="self")
-    def _augmented_lagrangian(self, x: jnp.ndarray, u: jnp.ndarray, target_x: jnp.ndarray, lambdas: jnp.ndarray, mu: jnp.ndarray) -> jnp.ndarray:
-        constraint_vals = self.f_constraints(x, u)
+    def _augmented_lagrangian(self, x: jnp.ndarray, u: jnp.ndarray, target_x: jnp.ndarray, c_arg: ConstraintArgs, lambdas: jnp.ndarray, mu: jnp.ndarray) -> jnp.ndarray:
+        constraint_vals = self.f_constraints(x, u, c_arg)
         penalty = jnp.sum(jax.vmap(self._penalty_function, in_axes=(0, 0, None))(constraint_vals, lambdas, mu))
         return self.cost(x, u, target_x) + penalty
-
 
     @partial(jax.jit, static_argnames="self")
     def _second_order_dynamics_approximation(self, x: jnp.ndarray, u: jnp.ndarray) \
@@ -64,18 +62,17 @@ class ALDDPController(ControllerBase):
         return f_x, f_u, f_ux, f_xx, f_uu
 
     @partial(jax.jit, static_argnames="self")
-    def _second_order_cost_approximation(self, x: jnp.ndarray, u: jnp.ndarray, target_x: jnp.ndarray, lambdas: jnp.ndarray, mu: jnp.ndarray) \
+    def _second_order_cost_approximation(self, x: jnp.ndarray, u: jnp.ndarray, target_x: jnp.ndarray, c_arg: ConstraintArgs, lambdas: jnp.ndarray, mu: jnp.ndarray) \
             -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        l_x = grad(self._augmented_lagrangian, argnums=0)(x, u, target_x, lambdas, mu)
-        l_u = grad(self._augmented_lagrangian, argnums=1)(x, u, target_x, lambdas, mu)
-        l_xx = hessian(self._augmented_lagrangian, argnums=0)(x, u, target_x, lambdas, mu)
-        l_uu = hessian(self._augmented_lagrangian, argnums=1)(x, u, target_x, lambdas, mu)
-        l_ux = jacfwd(jacfwd(self._augmented_lagrangian, argnums=1), argnums=0)(x, u, target_x, lambdas, mu)
+        l_x = grad(self._augmented_lagrangian, argnums=0)(x, u, target_x, c_arg, lambdas, mu)
+        l_u = grad(self._augmented_lagrangian, argnums=1)(x, u, target_x, c_arg, lambdas, mu)
+        l_xx = hessian(self._augmented_lagrangian, argnums=0)(x, u, target_x, c_arg, lambdas, mu)
+        l_uu = hessian(self._augmented_lagrangian, argnums=1)(x, u, target_x, c_arg, lambdas, mu)
+        l_ux = jacfwd(jacfwd(self._augmented_lagrangian, argnums=1), argnums=0)(x, u, target_x, c_arg, lambdas, mu)
         return l_x, l_u, l_ux, l_xx, l_uu
 
     @partial(jax.jit, static_argnames="self")
-    def backward(self, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, mu: jnp.ndarray)\
-            -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def backward(self, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, c_args: ConstraintArgs, mu: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
         # 最終時刻でのコストと勾配の計算
         ref_xs, ref_us, lambdas = ref_traj.ref_xs, ref_traj.ref_us, ref_traj.lambdas
         V = self.terminal_cost(ref_xs[-1], target_x)
@@ -84,12 +81,12 @@ class ALDDPController(ControllerBase):
 
         # フィードバックゲインの計算
         def scan_func(val, input_val):
-            ref_x, ref_u, lambda_ = input_val
+            ref_x, ref_u, lambda_, c_arg_ = input_val
             v, v_x, v_xx, mu_, time_step = val
 
             # 二次近似
             f_x, f_u, f_ux, f_xx, f_uu = self._second_order_dynamics_approximation(ref_x, ref_u)
-            l_x, l_u, l_ux, l_xx, l_uu = self._second_order_cost_approximation(ref_x, ref_u, target_x, lambda_, mu_)
+            l_x, l_u, l_ux, l_xx, l_uu = self._second_order_cost_approximation(ref_x, ref_u, target_x, c_arg_, lambda_, mu_)
 
             # フィードバックゲイン
             q_x = l_x + f_x.T @ v_x
@@ -114,10 +111,11 @@ class ALDDPController(ControllerBase):
 
             return (v_next, vx_next, vxx_next, mu_, time_step-1), (K_now, k_now)
 
+        inv_c_args = jax.tree.map(lambda x: x[::-1], c_args)
         _, (Ks, ks) = jax.lax.scan(
             scan_func,
             (V, V_x, V_xx, mu, self.horizon),
-            (ref_xs[:-1][::-1], ref_us[::-1], lambdas[::-1])
+            (ref_xs[:-1][::-1], ref_us[::-1], lambdas[::-1], inv_c_args)
         )
         return Ks[::-1], ks[::-1]
 
@@ -137,14 +135,14 @@ class ALDDPController(ControllerBase):
         return x_traj_new, u_traj_new, j_new
 
     @partial(jax.jit, static_argnames=["self"])
-    def calc_input(self, x: jnp.ndarray, target_x: jnp.ndarray, ref_traj_pre: ReferenceTrajectory) -> Tuple[jnp.ndarray, ReferenceTrajectory]:
+    def calc_input(self, x: jnp.ndarray, target_x: jnp.ndarray, c_args: ConstraintArgs, ref_traj_pre: ReferenceTrajectory) -> Tuple[jnp.ndarray, ReferenceTrajectory]:
         ref_traj = ReferenceTrajectory(ref_xs=ref_traj_pre.ref_xs, ref_us=ref_traj_pre.ref_us, lambdas=jnp.zeros_like(ref_traj_pre.lambdas) + 1e-6)
-        traj_info = self.iterative_compute(x, ref_traj, target_x, self.max_iter)
+        traj_info = self.iterative_compute(x, ref_traj, target_x, c_args, self.max_iter)
         return traj_info.ref_us[0], traj_info
 
     @partial(jax.jit, static_argnames="self")
-    def _linear_search(self, x0: jnp.ndarray, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, gains: Tuple[jnp.ndarray, jnp.ndarray],
-                       mu: jnp.ndarray, cost_old: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    def _linear_search(self, x0: jnp.ndarray, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, c_args: ConstraintArgs,
+                       gains: Tuple[jnp.ndarray, jnp.ndarray], mu: jnp.ndarray, cost_old: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         lambdas = ref_traj.lambdas
         def body_func(val):
             (_, _, _), cost_old_, _, alpha_ = val
@@ -152,7 +150,7 @@ class ALDDPController(ControllerBase):
 
             # penaltyもコストに含める
             cost_new_ = j_new_
-            constraint_vals_ = jax.vmap(self.f_constraints, in_axes=(0, 0))(x_traj_new_[:-1], u_traj_new_)
+            constraint_vals_ = jax.vmap(self.f_constraints, in_axes=(0, 0, 0))(x_traj_new_[:-1], u_traj_new_, c_args)
             cost_new_ += jnp.sum(jax.vmap(self._penalty_function, in_axes=(0, 0, None))(constraint_vals_, lambdas, mu))
 
             return (x_traj_new_, u_traj_new_, cost_new_), cost_old_, j_new_, alpha_*0.5
@@ -165,7 +163,7 @@ class ALDDPController(ControllerBase):
         x_traj_new, u_traj_new, j_new = self.forward(x0, ref_traj, target_x, gains, 1.0)
 
         cost_new = j_new
-        constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0))(x_traj_new[:-1], u_traj_new)
+        constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0, 0))(x_traj_new[:-1], u_traj_new, c_args)
         cost_new += jnp.sum(jax.vmap(self._penalty_function, in_axes=(0, 0, None))(constraint_vals, lambdas, mu))
 
         (x_traj_new, u_traj_new, cost_new), _, j_new, alpha = jax.lax.while_loop(
@@ -175,15 +173,14 @@ class ALDDPController(ControllerBase):
         )
         return x_traj_new, u_traj_new, j_new, cost_new
 
-
     @partial(jax.jit, static_argnames="self")
-    def _check_convergence1(self, j_new: jnp.ndarray, j_old: jnp.ndarray, ref_trajs: ReferenceTrajectory) -> jnp.ndarray:
+    def _check_convergence(self, j_new: jnp.ndarray, j_old: jnp.ndarray, ref_trajs: ReferenceTrajectory, c_args: ConstraintArgs) -> jnp.ndarray:
         # Check cost convergence
         is_cost_converged = jnp.abs(j_new - j_old).sum() < self.tol
 
         # Check constraint violations
         x_traj, u_traj = ref_trajs.ref_xs, ref_trajs.ref_us
-        constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0))(x_traj[:-1], u_traj)
+        constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0, 0))(x_traj[:-1], u_traj, c_args)
         is_feasible = constraint_vals.max() < 0.005
 
         # Check numerical stability
@@ -191,18 +188,18 @@ class ALDDPController(ControllerBase):
         return is_cost_converged & is_feasible & is_numerically_stable
 
     @partial(jax.jit, static_argnames="self")
-    def iterative_compute(self, x0: jnp.ndarray, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, max_iter: int) -> ReferenceTrajectory:
+    def iterative_compute(self, x0: jnp.ndarray, ref_traj: ReferenceTrajectory, target_x: jnp.ndarray, c_args: ConstraintArgs, max_iter: int) -> ReferenceTrajectory:
         def body_func(val):
             count_, (j_old_, _, cost_old, _), ref_traj_, mu_ = val
-            gains: Tuple[jnp.ndarray, jnp.ndarray] = self.backward(ref_traj_, target_x, mu_)
+            gains: Tuple[jnp.ndarray, jnp.ndarray] = self.backward(ref_traj_, target_x, c_args, mu_)
             lambdas_: jnp.ndarray = ref_traj_.lambdas
 
             # 直線探索
             cost_old = jax.lax.cond(count_ == 0, lambda _: jnp.inf, lambda xx: xx, operand=cost_old)
-            x_traj_new, u_traj_new, j_new_, cost_new = self._linear_search(x0, ref_traj_, target_x, gains, mu_, cost_old)
+            x_traj_new, u_traj_new, j_new_, cost_new = self._linear_search(x0, ref_traj_, target_x, c_args, gains, mu_, cost_old)
 
             # update multipliers
-            constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0))(x_traj_new[:-1], u_traj_new)  # (horizon, n_constraints)
+            constraint_vals = jax.vmap(self.f_constraints, in_axes=(0, 0, 0))(x_traj_new[:-1], u_traj_new, c_args)  # (horizon, n_constraints)
             violations = jnp.maximum(constraint_vals, 0)  # 違反量
             lambdas_ += mu_ * violations  # update lambda (horizon, n_constraints)
 
@@ -214,7 +211,7 @@ class ALDDPController(ControllerBase):
 
         def f_cond(val):
             count_, (j_new_, j_old_, _, _), ref_traj_, mu_ = val
-            return (count_ < max_iter) & (self._check_convergence1(j_new_, j_old_, ref_traj_) == False)
+            return (count_ < max_iter) & (self._check_convergence(j_new_, j_old_, ref_traj_, c_args) == False)
 
         # ラグランジュ乗数の初期化
         _, (j_new, j_old, _, _), ref_traj_ans, _ = jax.lax.while_loop(
@@ -236,4 +233,3 @@ class ALDDPController(ControllerBase):
         obj = cls(f_dynamics, f_constraints, Q, Q_terminal, R, max_iter, horizon, tol, gamma)
         obj.mu_init = mu_init
         return obj
-
